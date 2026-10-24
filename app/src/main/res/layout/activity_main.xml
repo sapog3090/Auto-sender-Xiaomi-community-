@@ -104,6 +104,12 @@
             android:layout_height="wrap_content"
             android:text="Отправить одну заявку сейчас" />
 
+        <Button
+            android:id="@+id/btnUpdate"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Проверить обновления" />
+
         <TextView
             android:id="@+id/tvLog"
             android:layout_width="match_parent"

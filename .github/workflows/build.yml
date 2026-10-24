@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,7 +21,17 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk BlUnlockSender.apk
       - uses: actions/upload-artifact@v4
         with:
           name: BlUnlockSender-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: BlUnlockSender.apk
+      # Постоянная прямая ссылка: releases/download/latest/BlUnlockSender.apk
+      - name: Publish latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: build ${{ github.run_number }}
+          prerelease: true
+          files: BlUnlockSender.apk
+          body: "Сборка ${{ github.run_number }} (${{ github.sha }})"

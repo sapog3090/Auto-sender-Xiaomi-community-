@@ -61,6 +61,7 @@ class MainActivity : AppCompatActivity() {
             login.launch(android.content.Intent(this, LoginActivity::class.java))
         }
         findViewById<Button>(R.id.btnToken).setOnClickListener { askToken() }
+        findViewById<Button>(R.id.btnUpdate).setOnClickListener { Updater.check(this, silent = false) }
         findViewById<Button>(R.id.btnSync).setOnClickListener { Sender.syncTime() }
         findViewById<Button>(R.id.btnState).setOnClickListener { api()?.let(Sender::checkState) }
         findViewById<Button>(R.id.btnNow).setOnClickListener { api()?.let(Sender::applyNow) }
@@ -110,6 +111,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (!TrueClock.synced) Sender.syncTime()
+        if (savedInstanceState == null) Updater.check(this, silent = true)
     }
 
     private fun updateClock() {
