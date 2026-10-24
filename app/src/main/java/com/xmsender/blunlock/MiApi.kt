@@ -17,7 +17,9 @@ class MiApi(private val token: String, private val deviceId: String) {
 
     companion object {
         private const val BASE = "https://sgp-api.buy.mi.com/bbs/api/global/"
-        private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
+        const val USER_AGENT = "Mozilla/5.0 (Linux; Android 15; 23124RA7EO) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Version/4.0 Chrome/128.0.6613.88 Mobile Safari/537.36 Xiaomi/MiuiForum/5.4.39"
+        private val JSON_TYPE = "application/json;charset=utf-8".toMediaType()
 
         private val client: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
@@ -34,10 +36,12 @@ class MiApi(private val token: String, private val deviceId: String) {
         .url(BASE + path)
         .header(
             "Cookie",
-            "new_bbs_serviceToken=$token;versionCode=500411;versionName=5.4.11;deviceId=$deviceId;"
+            "new_bbs_serviceToken=$token;versionCode=500439;versionName=5.4.39;deviceId=$deviceId;"
         )
-        .header("User-Agent", "okhttp/4.12.0")
+        .header("User-Agent", USER_AGENT)
         .header("Accept", "application/json")
+        .header("Origin", "https://c.mi.com")
+        .header("Referer", "https://c.mi.com/")
 
     private fun execute(req: Request): JSONObject {
         client.newCall(req).execute().use { resp ->
@@ -59,14 +63,14 @@ class MiApi(private val token: String, private val deviceId: String) {
 }
 
 /** Итог разбора ответа на заявку. */
-enum class ApplyOutcome { APPROVED, LIMIT, BLOCKED, MAYBE, ERROR }
+enum class ApplyOutcome { APPROVED, LIMIT, BLOCKED, TOKEN_EXPIRED, ERROR }
 
 object MiParse {
 
     fun describeState(json: JSONObject): String {
-        if (json.optInt("code", -1) != 0) {
-            return "Ошибка (code=${json.opt("code")}): ${json.optString("msg")}"
-        }
+        val code = json.optInt("code", -1)
+        if (code == 100004) return "⛔ Токен истёк — войдите заново."
+        if (code != 0) return "Ошибка (code=$code): ${json.optString("msg")}"
         val data = json.optJSONObject("data") ?: return "Пустой ответ: $json"
         val deadline = data.optString("deadline_format")
         if (data.optInt("is_pass") == 1) {
@@ -74,7 +78,7 @@ object MiParse {
         }
         return when (data.optInt("button_state")) {
             1 -> "Можно подавать заявку."
-            2 -> "⛔ Аккаунт заблокирован для заявок до $deadline (месяц/день)."
+            2 -> "⛔ Аккаунт временно ограничен для заявок до $deadline (месяц/день)."
             3 -> "⛔ Аккаунту меньше 30 дней — подать заявку пока нельзя."
             else -> "Неизвестный статус: $data"
         }
@@ -82,20 +86,19 @@ object MiParse {
 
     fun parseApply(json: JSONObject): Pair<ApplyOutcome, String> {
         val code = json.optInt("code", -1)
+        if (code == 100004) return ApplyOutcome.TOKEN_EXPIRED to "⛔ Токен истёк — войдите заново."
+        if (code == 100001) return ApplyOutcome.ERROR to "Неверный формат запроса (100001)"
         val data = json.optJSONObject("data")
-        if (code == 0 && data != null) {
-            val deadline = data.optString("deadline_format")
-            return when (data.optInt("apply_result")) {
-                1 -> ApplyOutcome.APPROVED to "✅ ОДОБРЕНО! Проверьте статус и идите в Mi Unlock Tool."
-                3 -> ApplyOutcome.LIMIT to "Квота исчерпана, следующая попытка: $deadline"
-                4 -> ApplyOutcome.BLOCKED to "⛔ Аккаунт заблокирован до $deadline"
-                else -> ApplyOutcome.ERROR to "Неизвестный результат: $data"
-            }
-        }
-        return when (code) {
-            100001 -> ApplyOutcome.ERROR to "Заявка отклонена (100001): ${json.optString("msg")}"
-            100003 -> ApplyOutcome.MAYBE to "Возможно одобрено (100003) — проверьте статус"
-            else -> ApplyOutcome.ERROR to "code=$code ${json.optString("msg")}"
+            ?: return ApplyOutcome.ERROR to "code=$code ${json.optString("msg")}"
+        val deadline = data.optString("deadline_format")
+        return when (val r = data.optInt("apply_result", -1)) {
+            1 -> ApplyOutcome.APPROVED to "✅ ОДОБРЕНО! Идите в Mi Unlock Tool."
+            2 -> ApplyOutcome.BLOCKED to "⛔ Ошибка аккаунта, повторить после $deadline"
+            3 -> ApplyOutcome.LIMIT to "Квота исчерпана, следующая попытка: $deadline"
+            4 -> ApplyOutcome.ERROR to "Заявка не прошла (4)"
+            5 -> ApplyOutcome.ERROR to "Повторите через минуту (5)"
+            6 -> ApplyOutcome.BLOCKED to "⛔ Сработал антифрод Xiaomi (6)"
+            else -> ApplyOutcome.ERROR to "Неизвестный результат apply_result=$r, code=$code"
         }
     }
 }

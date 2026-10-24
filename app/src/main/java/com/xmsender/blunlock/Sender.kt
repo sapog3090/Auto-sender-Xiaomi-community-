@@ -149,9 +149,9 @@ object Sender {
                         val json = api.apply()
                         val gotRel = TrueClock.now() - target
                         val (outcome, msg) = MiParse.parseApply(json)
-                        val raw = if (outcome == ApplyOutcome.ERROR || outcome == ApplyOutcome.MAYBE) "\n  raw: $json" else ""
+                        val raw = if (outcome == ApplyOutcome.ERROR) "\n  raw: $json" else ""
                         log("#$n отпр. ${sentRel}мс, ответ ${gotRel}мс: $msg$raw")
-                        if (outcome == ApplyOutcome.APPROVED || outcome == ApplyOutcome.BLOCKED) {
+                        if (outcome != ApplyOutcome.LIMIT && outcome != ApplyOutcome.ERROR) {
                             stopFlag.set(true)
                         }
                     } catch (e: Exception) {
