@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import java.time.Instant
 import java.time.format.DateTimeFormatter
+import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Живёт дольше Activity (переживает поворот экрана). */
@@ -70,12 +71,16 @@ object Sender {
         }
     }
 
-    fun startScheduled(api: MiApi, startOffsetMs: Long, count: Int, intervalMs: Long) {
+    /** onTune(сдвиг, интервал) — рекомендация на следующий запуск по найденной границе сброса. */
+    fun startScheduled(
+        api: MiApi, startOffsetMs: Long, count: Int, intervalMs: Long,
+        onTune: (Long, Long) -> Unit,
+    ) {
         if (_running.value) return
         _running.value = true
         job = scope.launch {
             try {
-                runScheduled(api, startOffsetMs, count, intervalMs)
+                runScheduled(api, startOffsetMs, count, intervalMs, onTune)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -94,7 +99,29 @@ object Sender {
         }
     }
 
-    private suspend fun runScheduled(api: MiApi, startOffsetMs: Long, count: Int, intervalMs: Long) {
+    /** Ищет границу сброса между ответами «до» и «после» и сдвигает серию на неё. */
+    private fun tune(shots: List<Pair<Long, Boolean>>, count: Int, onTune: (Long, Long) -> Unit) {
+        val lastPre = shots.filter { it.second }.maxOfOrNull { it.first }
+        val firstPost = shots.filter { !it.second }.minOfOrNull { it.first }
+        val interval = 25L
+        val offset = when {
+            lastPre != null && firstPost != null -> {
+                val boundary = (lastPre + firstPost) / 2
+                log("Граница сброса ≈ ${boundary} мс (между ${lastPre} и ${firstPost})")
+                boundary - interval * 2
+            }
+            lastPre != null -> lastPre + interval // все пришли до сброса — позже
+            firstPost != null -> firstPost - interval * count // все после — раньше
+            else -> return
+        }
+        log("Автонастройка на завтра: сдвиг $offset мс, интервал $interval мс (сохранено)")
+        onTune(offset, interval)
+    }
+
+    private suspend fun runScheduled(
+        api: MiApi, startOffsetMs: Long, count: Int, intervalMs: Long,
+        onTune: (Long, Long) -> Unit,
+    ) {
         if (!TrueClock.synced) {
             val s = withContext(Dispatchers.IO) { Sntp.bestSample(::log) }
             if (s != null) {
@@ -137,18 +164,23 @@ object Sender {
         try { withContext(Dispatchers.IO) { api.state() } } catch (_: Exception) {}
 
         val stopFlag = AtomicBoolean(false)
+        // (расчётный момент прихода на сервер относительно сброса, пришёл ли до сброса)
+        val shots = Collections.synchronizedList(mutableListOf<Pair<Long, Boolean>>())
         val firstSend = target + startOffsetMs - oneWay
         coroutineScope {
             for (i in 0 until count) {
                 if (stopFlag.get() || !isActive) break
                 waitUntil(firstSend + i * intervalMs)
                 val n = i + 1
+                val planned = startOffsetMs + i * intervalMs
                 launch(Dispatchers.IO) {
                     val sentRel = TrueClock.now() - target
                     try {
                         val json = api.apply()
                         val gotRel = TrueClock.now() - target
                         val (outcome, msg) = MiParse.parseApply(json)
+                        val deadline = json.optJSONObject("data")?.optLong("deadline", 0L) ?: 0L
+                        if (deadline > 0) shots += planned to (deadline * 1000 <= target)
                         val raw = if (outcome == ApplyOutcome.ERROR) "\n  raw: $json" else ""
                         log("#$n отпр. ${sentRel}мс, ответ ${gotRel}мс: $msg$raw")
                         if (outcome != ApplyOutcome.LIMIT && outcome != ApplyOutcome.ERROR) {
@@ -160,6 +192,8 @@ object Sender {
                 }
             }
         }
+
+        tune(shots.toList(), count, onTune)
 
         delay(1000)
         try {

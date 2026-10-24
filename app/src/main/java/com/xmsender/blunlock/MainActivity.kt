@@ -80,7 +80,14 @@ class MainActivity : AppCompatActivity() {
             prefs.offsetMs = offset
             prefs.count = count
             prefs.intervalMs = interval
-            Sender.startScheduled(api, offset, count, interval)
+            Sender.startScheduled(api, offset, count, interval) { newOffset, newInterval ->
+                prefs.offsetMs = newOffset
+                prefs.intervalMs = newInterval
+                runOnUiThread {
+                    etOffset.setText(newOffset.toString())
+                    etInterval.setText(newInterval.toString())
+                }
+            }
         }
 
         lifecycleScope.launch {
